@@ -89,7 +89,7 @@ export default function Dashboard() {
       const res = await fetch('/api/sales?dias=90');
       const data = await res.json();
       setSalesData(data.data || {});
-      setSalesInfo({ totalOrders: data.totalOrders, period: data.period });
+      setSalesInfo({ totalOrders: data.totalOrders, ordersProcessed: data.ordersProcessed, period: data.period });
     } catch (e) { console.error(e); }
     setLoadingSales(false);
   };
@@ -245,7 +245,7 @@ export default function Dashboard() {
                   )}
                   {salesInfo && !loadingSales && (
                     <span className="text-xs text-gray-500 font-mono">
-                      {salesInfo.totalOrders} pedidos de venda ({salesInfo.period?.days}d)
+                      {salesInfo.totalOrders} pedidos • {salesInfo.ordersProcessed} processados ({salesInfo.period?.days}d)
                     </span>
                   )}
                 </div>
