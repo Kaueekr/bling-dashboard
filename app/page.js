@@ -40,7 +40,7 @@ export default function Dashboard() {
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [salesStatus, setSalesStatus] = useState('idle'); // idle | loading | done | error
-  const [salesProgress, setSalesProgress] = useState({ page: 0, orders: 0 });
+  const [salesProgress, setSalesProgress] = useState({ page: 0, notas: 0 });
   const [productFilter, setProductFilter] = useState('');
   const [sortField, setSortField] = useState('qtdVendida');
   const [sortDir, setSortDir] = useState('desc');
@@ -72,11 +72,11 @@ export default function Dashboard() {
     abortRef.current = false;
     setSalesMap({});
     setSalesStatus('loading');
-    setSalesProgress({ page: 0, orders: 0 });
+    setSalesProgress({ page: 0, notas: 0 });
 
     let page = 1;
     let hasMore = true;
-    let totalOrders = 0;
+    let totalNotas = 0;
     const accumulated = {};
 
     while (hasMore && !abortRef.current) {
@@ -93,13 +93,13 @@ export default function Dashboard() {
           accumulated[pid].revenue += sales.revenue;
         });
 
-        totalOrders += data.ordersInPage || 0;
+        totalNotas += data.notasInPage || 0;
         hasMore = data.hasMore;
         page++;
 
         // Update state so UI refreshes progressively
         setSalesMap({ ...accumulated });
-        setSalesProgress({ page: page - 1, orders: totalOrders });
+        setSalesProgress({ page: page - 1, notas: totalNotas });
       } catch (e) {
         console.error('Sales page failed:', e);
         setSalesStatus('error');
@@ -266,17 +266,17 @@ export default function Dashboard() {
                   {isSalesLoading && (
                     <span className="text-xs text-amber-400 font-mono flex items-center gap-1">
                       <Loader2 size={10} className="animate-spin" />
-                      Carregando vendas... página {salesProgress.page} ({salesProgress.orders} pedidos)
+                      Carregando vendas... página {salesProgress.page} ({salesProgress.notas} notas)
                     </span>
                   )}
                   {salesStatus === 'done' && (
                     <span className="text-xs text-emerald-400 font-mono">
-                      ✓ {salesProgress.orders} pedidos processados
+                      ✓ {salesProgress.notas} notas processadas
                     </span>
                   )}
                   {salesStatus === 'error' && (
                     <span className="text-xs text-rose-400 font-mono">
-                      Erro ao carregar vendas (dados parciais: {salesProgress.orders} pedidos)
+                      Erro ao carregar vendas ({salesProgress.notas} notas processadas)
                     </span>
                   )}
                 </div>

@@ -13,7 +13,7 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const days = parseInt(searchParams.get('dias') || '90');
   const page = parseInt(searchParams.get('page') || '1');
-  const ordersPerPage = 50; // Fetch 50 orders per call
+  const notasPerPage = 100;
 
   let latestTokens = null;
   const ct = () => latestTokens || tokens;
@@ -24,32 +24,34 @@ export async function GET(request) {
     startDate.setDate(startDate.getDate() - days);
     const fmt = (d) => d.toISOString().split('T')[0];
 
-    // ── Get one page of sales orders ──
+    // ── Get one page of NF-e (notas fiscais) de saída ──
     const qp = new URLSearchParams({
       pagina: page,
-      limite: ordersPerPage,
-      dataInicial: fmt(startDate),
-      dataFinal: fmt(endDate),
+      limite: notasPerPage,
+      dataEmissaoInicial: fmt(startDate),
+      dataEmissaoFinal: fmt(endDate),
+      tipo: '1', // 1 = saída
     });
 
-    const { data: d, newTokens: t } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
+    const { data: d, newTokens: t } = await blingFetch(`/nfe?${qp}`, ct());
     if (t) latestTokens = t;
-    const orders = d?.data || d || [];
+    const notas = d?.data || d || [];
 
-    // ── Get item details from each order ──
+    // ── Get items from each NF-e ──
     const productSales = {};
     const batchSize = 3;
 
-    for (let i = 0; i < orders.length; i += batchSize) {
-      const batch = orders.slice(i, i + batchSize);
+    for (let i = 0; i < notas.length; i += batchSize) {
+      const batch = notas.slice(i, i + batchSize);
 
-      const promises = batch.map(async (order) => {
+      const promises = batch.map(async (nota) => {
         try {
           const { data: detail, newTokens: t2 } = await blingFetch(
-            `/pedidos/vendas/${order.id}`, ct()
+            `/nfe/${nota.id}`, ct()
           );
           if (t2) latestTokens = t2;
-          const items = detail?.data?.itens || detail?.itens || [];
+          const nfeData = detail?.data || detail || {};
+          const items = nfeData.itens || [];
 
           items.forEach(item => {
             const pid = item.produto?.id;
@@ -64,15 +66,15 @@ export async function GET(request) {
       });
 
       await Promise.all(promises);
-      if (i + batchSize < orders.length) await sleep(350);
+      if (i + batchSize < notas.length) await sleep(350);
     }
 
-    const hasMore = orders.length >= ordersPerPage;
+    const hasMore = notas.length >= notasPerPage;
 
     const response = NextResponse.json({
       data: productSales,
       page,
-      ordersInPage: orders.length,
+      notasInPage: notas.length,
       hasMore,
     });
     if (latestTokens) response.headers.set('Set-Cookie', createTokenCookie(latestTokens));
