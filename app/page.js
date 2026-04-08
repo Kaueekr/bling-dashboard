@@ -9,6 +9,7 @@ import {
   Package, TrendingUp, AlertTriangle, DollarSign,
   Search, Filter, RefreshCw, ExternalLink, ChevronDown,
   ShoppingCart, BarChart3, Boxes, ArrowUpRight, ArrowDownRight,
+  Users, Loader2, Percent,
 } from 'lucide-react';
 
 const COLORS = ['#c4f442', '#60a5fa', '#fb7185', '#fbbf24', '#a78bfa', '#34d399', '#f472b6', '#38bdf8'];
@@ -141,6 +142,15 @@ export default function Dashboard() {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [statusFilter, setStatusFilter] = useState('all');
 
+  // Supplier search state
+  const [supplierSearch, setSupplierSearch] = useState('');
+  const [suppliers, setSuppliers] = useState([]);
+  const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [supplierProducts, setSupplierProducts] = useState([]);
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [supplierProductSearch, setSupplierProductSearch] = useState('');
+
   // Check auth
   useEffect(() => {
     fetch('/api/auth/status')
@@ -237,6 +247,43 @@ export default function Dashboard() {
     return matchesSearch && matchesStatus;
   });
 
+  // ── Supplier functions ──
+  const searchSuppliers = async () => {
+    if (!supplierSearch.trim()) return;
+    setLoadingSuppliers(true);
+    setSelectedSupplier(null);
+    setSupplierProducts([]);
+    try {
+      const res = await fetch(`/api/suppliers?search=${encodeURIComponent(supplierSearch)}`);
+      const data = await res.json();
+      setSuppliers(data.data || data || []);
+    } catch (e) {
+      console.error('Supplier search failed:', e);
+    }
+    setLoadingSuppliers(false);
+  };
+
+  const loadSupplierProducts = async (supplier) => {
+    setSelectedSupplier(supplier);
+    setLoadingProducts(true);
+    setSupplierProducts([]);
+    try {
+      const res = await fetch(`/api/suppliers/${supplier.id}/products`);
+      const data = await res.json();
+      setSupplierProducts(data.data || []);
+    } catch (e) {
+      console.error('Failed to load supplier products:', e);
+    }
+    setLoadingProducts(false);
+  };
+
+  // Filter supplier products
+  const filteredSupplierProducts = supplierProducts.filter(p =>
+    !supplierProductSearch ||
+    (p.nome || '').toLowerCase().includes(supplierProductSearch.toLowerCase()) ||
+    (p.codigo || '').toLowerCase().includes(supplierProductSearch.toLowerCase())
+  );
+
   if (authenticated === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-0">
@@ -249,6 +296,7 @@ export default function Dashboard() {
 
   const tabs = [
     { id: 'overview', label: 'Visão Geral', icon: BarChart3 },
+    { id: 'suppliers', label: 'Fornecedores', icon: Users },
     { id: 'purchases', label: 'Pedidos de Compra', icon: ShoppingCart },
     { id: 'stock', label: 'Estoque', icon: Boxes },
   ];
@@ -561,6 +609,194 @@ export default function Dashboard() {
                     </table>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ═══ SUPPLIERS TAB ═══ */}
+            {activeTab === 'suppliers' && (
+              <div className="space-y-6">
+                {/* Search bar */}
+                <div className="bg-surface-1 border border-surface-3 rounded-2xl p-6">
+                  <SectionHeader icon={Users} title="Buscar Fornecedor" />
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <input
+                        type="text"
+                        placeholder="Digite o nome do fornecedor..."
+                        value={supplierSearch}
+                        onChange={e => setSupplierSearch(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && searchSuppliers()}
+                        className="w-full bg-surface-2 border border-surface-4 rounded-xl pl-9 pr-4 py-3 text-sm outline-none focus:border-accent-lime/40 placeholder:text-gray-600"
+                      />
+                    </div>
+                    <button
+                      onClick={searchSuppliers}
+                      disabled={loadingSuppliers}
+                      className="bg-accent-lime text-surface-0 font-bold text-sm px-6 py-3 rounded-xl hover:bg-accent-lime/90 transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {loadingSuppliers ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                      Buscar
+                    </button>
+                  </div>
+
+                  {/* Supplier results */}
+                  {suppliers.length > 0 && (
+                    <div className="mt-4 space-y-2">
+                      <p className="text-xs text-gray-500 font-mono uppercase tracking-wider mb-3">
+                        {suppliers.length} fornecedor{suppliers.length !== 1 ? 'es' : ''} encontrado{suppliers.length !== 1 ? 's' : ''}
+                      </p>
+                      {suppliers.map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => loadSupplierProducts(s)}
+                          className={`w-full text-left p-4 rounded-xl border transition-all ${
+                            selectedSupplier?.id === s.id
+                              ? 'bg-accent-lime/10 border-accent-lime/30'
+                              : 'bg-surface-2/50 border-surface-4 hover:border-surface-4 hover:bg-surface-2'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium">{s.nome || s.fantasia || 'Sem nome'}</p>
+                              <p className="text-[11px] text-gray-500 font-mono mt-0.5">
+                                {s.cnpj || s.cpf || ''} {s.fantasia && s.nome !== s.fantasia ? `• ${s.fantasia}` : ''}
+                              </p>
+                            </div>
+                            <ChevronDown size={14} className={`text-gray-500 transition-transform ${selectedSupplier?.id === s.id ? 'rotate-180' : ''}`} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected supplier products */}
+                {selectedSupplier && (
+                  <div className="bg-surface-1 border border-surface-3 rounded-2xl p-6">
+                    <div className="flex items-center justify-between mb-5">
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <Users size={18} className="text-accent-lime" />
+                          <h2 className="font-display text-sm uppercase tracking-widest">
+                            Produtos de {selectedSupplier.nome || selectedSupplier.fantasia}
+                          </h2>
+                        </div>
+                        {!loadingProducts && (
+                          <p className="text-xs text-gray-500 mt-1 ml-8 font-mono">
+                            {supplierProducts.length} produto{supplierProducts.length !== 1 ? 's' : ''} encontrado{supplierProducts.length !== 1 ? 's' : ''}
+                          </p>
+                        )}
+                      </div>
+                      {supplierProducts.length > 0 && (
+                        <div className="relative w-64">
+                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                          <input
+                            type="text"
+                            placeholder="Filtrar produtos..."
+                            value={supplierProductSearch}
+                            onChange={e => setSupplierProductSearch(e.target.value)}
+                            className="w-full bg-surface-2 border border-surface-4 rounded-xl pl-9 pr-4 py-2 text-xs outline-none focus:border-accent-lime/40 placeholder:text-gray-600"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {loadingProducts ? (
+                      <div className="flex items-center justify-center py-20">
+                        <div className="text-center">
+                          <Loader2 className="animate-spin text-accent-lime mx-auto mb-3" size={28} />
+                          <p className="text-xs text-gray-400 font-mono">Carregando produtos e estoque...</p>
+                          <p className="text-[10px] text-gray-600 mt-1">Isso pode levar alguns segundos</p>
+                        </div>
+                      </div>
+                    ) : supplierProducts.length === 0 ? (
+                      <p className="text-gray-500 text-sm text-center py-16">
+                        Nenhum produto encontrado nos pedidos de compra deste fornecedor
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="data-table">
+                          <thead>
+                            <tr className="bg-surface-2/50">
+                              <th className="pl-6">Código</th>
+                              <th>Produto</th>
+                              <th>Categoria</th>
+                              <th className="text-right">Custo</th>
+                              <th className="text-right">Venda</th>
+                              <th className="text-right">Margem</th>
+                              <th className="text-right">Estoque</th>
+                              <th className="text-right pr-6">Última Compra</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredSupplierProducts.map((p, i) => {
+                              const margin = parseFloat(p.margem);
+                              const isLowMargin = margin < 20;
+                              const isLowStock = p.estoque <= 5;
+                              return (
+                                <tr key={p.id || i}>
+                                  <td className="pl-6 font-mono text-xs text-accent-blue">{p.codigo}</td>
+                                  <td>
+                                    <p className="text-sm">{p.nome}</p>
+                                  </td>
+                                  <td className="text-xs text-gray-400">{p.categoria}</td>
+                                  <td className="text-right font-mono text-sm">{formatCurrency(p.precoCusto)}</td>
+                                  <td className="text-right font-mono text-sm">{formatCurrency(p.precoVenda)}</td>
+                                  <td className="text-right">
+                                    {p.margem ? (
+                                      <span className={`font-mono text-sm font-bold ${
+                                        isLowMargin ? 'text-rose-400' : margin >= 40 ? 'text-emerald-400' : 'text-accent-amber'
+                                      }`}>
+                                        {p.margem}%
+                                      </span>
+                                    ) : (
+                                      <span className="text-gray-600 text-xs">—</span>
+                                    )}
+                                  </td>
+                                  <td className={`text-right font-mono text-sm font-bold ${isLowStock ? 'text-rose-400' : 'text-gray-200'}`}>
+                                    {p.estoque}
+                                    {isLowStock && <AlertTriangle size={11} className="inline ml-1 text-rose-400" />}
+                                  </td>
+                                  <td className="text-right pr-6">
+                                    <div>
+                                      <p className="text-xs text-gray-400 font-mono">{formatDate(p.ultimaCompraData)}</p>
+                                      <p className="text-[10px] text-gray-600">{p.ultimaCompraQtd} {p.unidade}</p>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+
+                        {/* Summary cards */}
+                        <div className="grid grid-cols-3 gap-4 mt-6 px-6 pb-2">
+                          <div className="bg-surface-2/50 rounded-xl p-4">
+                            <p className="text-[10px] text-gray-500 font-mono uppercase tracking-wider">Margem Média</p>
+                            <p className="text-lg font-display font-bold text-accent-amber mt-1">
+                              {supplierProducts.filter(p => p.margem).length
+                                ? (supplierProducts.reduce((sum, p) => sum + (parseFloat(p.margem) || 0), 0) / supplierProducts.filter(p => p.margem).length).toFixed(1) + '%'
+                                : '—'}
+                            </p>
+                          </div>
+                          <div className="bg-surface-2/50 rounded-xl p-4">
+                            <p className="text-[10px] text-gray-500 font-mono uppercase tracking-wider">Produtos Estoque Baixo</p>
+                            <p className="text-lg font-display font-bold text-rose-400 mt-1">
+                              {supplierProducts.filter(p => p.estoque <= 5).length}
+                            </p>
+                          </div>
+                          <div className="bg-surface-2/50 rounded-xl p-4">
+                            <p className="text-[10px] text-gray-500 font-mono uppercase tracking-wider">Total Produtos</p>
+                            <p className="text-lg font-display font-bold text-accent-lime mt-1">
+                              {supplierProducts.length}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </>
