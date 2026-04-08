@@ -13,7 +13,6 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const days = parseInt(searchParams.get('dias') || '90');
   const page = parseInt(searchParams.get('page') || '1');
-  const notasPerPage = 100;
 
   let latestTokens = null;
   const ct = () => latestTokens || tokens;
@@ -24,41 +23,53 @@ export async function GET(request) {
     startDate.setDate(startDate.getDate() - days);
     const fmt = (d) => d.toISOString().split('T')[0];
 
-    // ── Get one page of NF-e (notas fiscais) de saída ──
+    // ── Get one page of sales orders (ALL channels) ──
     const qp = new URLSearchParams({
       pagina: page,
-      limite: notasPerPage,
-      dataEmissaoInicial: fmt(startDate),
-      dataEmissaoFinal: fmt(endDate),
-      tipo: '1', // 1 = saída
+      limite: 100,
+      dataInicial: fmt(startDate),
+      dataFinal: fmt(endDate),
+      idsSituacoes: '9',
     });
 
-    const { data: d, newTokens: t } = await blingFetch(`/nfe?${qp}`, ct());
-    if (t) latestTokens = t;
-    const notas = d?.data || d || [];
+    // Try with situacao filter first, fallback without
+    let orders = [];
+    try {
+      const { data: d, newTokens: t } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
+      if (t) latestTokens = t;
+      orders = d?.data || d || [];
+    } catch (e) {
+      // Retry without situacao filter
+      qp.delete('idsSituacoes');
+      const { data: d2, newTokens: t2 } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
+      if (t2) latestTokens = t2;
+      orders = d2?.data || d2 || [];
+    }
 
-    // ── Get items from each NF-e ──
+    // ── Get items from each order ──
     const productSales = {};
     const batchSize = 3;
 
-    for (let i = 0; i < notas.length; i += batchSize) {
-      const batch = notas.slice(i, i + batchSize);
+    for (let i = 0; i < orders.length; i += batchSize) {
+      const batch = orders.slice(i, i + batchSize);
 
-      const promises = batch.map(async (nota) => {
+      const promises = batch.map(async (order) => {
         try {
-          const { data: detail, newTokens: t2 } = await blingFetch(
-            `/nfe/${nota.id}`, ct()
+          const { data: detail, newTokens: t3 } = await blingFetch(
+            `/pedidos/vendas/${order.id}`, ct()
           );
-          if (t2) latestTokens = t2;
-          const nfeData = detail?.data || detail || {};
-          const items = nfeData.itens || [];
+          if (t3) latestTokens = t3;
+          const orderData = detail?.data || detail || {};
+          const items = orderData.itens || [];
 
           items.forEach(item => {
             const pid = item.produto?.id;
             if (!pid) return;
             if (!productSales[pid]) productSales[pid] = { qty: 0, revenue: 0 };
             const qty = parseFloat(item.quantidade) || 0;
-            const price = parseFloat(item.valor) || parseFloat(item.preco) || 0;
+            const price = parseFloat(item.valor) ||
+                          parseFloat(item.preco) ||
+                          parseFloat(item.valorUnidade) || 0;
             productSales[pid].qty += qty;
             productSales[pid].revenue += qty * price;
           });
@@ -66,15 +77,15 @@ export async function GET(request) {
       });
 
       await Promise.all(promises);
-      if (i + batchSize < notas.length) await sleep(350);
+      if (i + batchSize < orders.length) await sleep(350);
     }
 
-    const hasMore = notas.length >= notasPerPage;
+    const hasMore = orders.length >= 100;
 
     const response = NextResponse.json({
       data: productSales,
       page,
-      notasInPage: notas.length,
+      notasInPage: orders.length,
       hasMore,
     });
     if (latestTokens) response.headers.set('Set-Cookie', createTokenCookie(latestTokens));
