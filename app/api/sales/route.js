@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { blingFetch, getTokensFromCookies, createTokenCookie } from '@/lib/bling';
 
-// Extend Vercel timeout to max for free plan
 export const maxDuration = 300;
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -13,6 +12,8 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url);
   const days = parseInt(searchParams.get('dias') || '90');
+  const page = parseInt(searchParams.get('page') || '1');
+  const ordersPerPage = 50; // Fetch 50 orders per call
 
   let latestTokens = null;
   const ct = () => latestTokens || tokens;
@@ -23,37 +24,24 @@ export async function GET(request) {
     startDate.setDate(startDate.getDate() - days);
     const fmt = (d) => d.toISOString().split('T')[0];
 
-    // ── Get ALL sales orders in period ──
-    let allOrders = [];
-    let page = 1;
-    let hasMore = true;
+    // ── Get one page of sales orders ──
+    const qp = new URLSearchParams({
+      pagina: page,
+      limite: ordersPerPage,
+      dataInicial: fmt(startDate),
+      dataFinal: fmt(endDate),
+    });
 
-    while (hasMore && page <= 50) {
-      const qp = new URLSearchParams({
-        pagina: page, limite: 100,
-        dataInicial: fmt(startDate), dataFinal: fmt(endDate),
-      });
-
-      try {
-        const { data: d, newTokens: t } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
-        if (t) latestTokens = t;
-        const orders = d?.data || d || [];
-        if (orders.length > 0) {
-          allOrders = [...allOrders, ...orders];
-          page++;
-          if (orders.length < 100) hasMore = false;
-        } else hasMore = false;
-      } catch (e) { hasMore = false; }
-
-      if (hasMore) await sleep(200);
-    }
+    const { data: d, newTokens: t } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
+    if (t) latestTokens = t;
+    const orders = d?.data || d || [];
 
     // ── Get item details from each order ──
     const productSales = {};
-    const batchSize = 3; // Smaller batches to avoid rate limit
+    const batchSize = 3;
 
-    for (let i = 0; i < allOrders.length; i += batchSize) {
-      const batch = allOrders.slice(i, i + batchSize);
+    for (let i = 0; i < orders.length; i += batchSize) {
+      const batch = orders.slice(i, i + batchSize);
 
       const promises = batch.map(async (order) => {
         try {
@@ -76,14 +64,16 @@ export async function GET(request) {
       });
 
       await Promise.all(promises);
-      if (i + batchSize < allOrders.length) await sleep(350);
+      if (i + batchSize < orders.length) await sleep(350);
     }
+
+    const hasMore = orders.length >= ordersPerPage;
 
     const response = NextResponse.json({
       data: productSales,
-      totalOrders: allOrders.length,
-      ordersProcessed: allOrders.length,
-      period: { start: fmt(startDate), end: fmt(endDate), days },
+      page,
+      ordersInPage: orders.length,
+      hasMore,
     });
     if (latestTokens) response.headers.set('Set-Cookie', createTokenCookie(latestTokens));
     return response;
