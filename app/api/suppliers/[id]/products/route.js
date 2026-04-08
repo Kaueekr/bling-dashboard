@@ -13,7 +13,7 @@ export async function GET(request, { params }) {
   let latestTokens = null;
 
   try {
-    // 1. Fetch purchase orders for this supplier (last 200)
+    // 1. Fetch purchase orders for this supplier
     const purchaseParams = new URLSearchParams({
       pagina: 1,
       limite: 100,
@@ -24,16 +24,16 @@ export async function GET(request, { params }) {
       `/pedidos/compras?${purchaseParams}`, tokens
     );
     if (t1) latestTokens = t1;
-    const currentTokens = latestTokens || tokens;
+    const currentTokens = () => latestTokens || tokens;
 
     const purchases = purchasesData?.data || purchasesData || [];
 
-    // 2. For each purchase, get the full details (items)
+    // 2. Get details for each purchase to extract items
     const productMap = {};
     const detailPromises = purchases.slice(0, 30).map(async (purchase) => {
       try {
         const { data: detail, newTokens: t2 } = await blingFetch(
-          `/pedidos/compras/${purchase.id}`, currentTokens
+          `/pedidos/compras/${purchase.id}`, currentTokens()
         );
         if (t2) latestTokens = t2;
 
@@ -53,7 +53,7 @@ export async function GET(request, { params }) {
               id: productId,
               codigo: item.produto?.codigo || item.codigo || '—',
               nome: item.descricao || item.produto?.nome || 'Sem nome',
-              precoCusto: item.valor || 0,
+              precoCusto: item.valor || item.preco || 0,
               quantidade: item.quantidade || 0,
               ultimaCompraData: orderDate || null,
               ultimaCompraQtd: item.quantidade || 0,
@@ -68,44 +68,76 @@ export async function GET(request, { params }) {
 
     await Promise.all(detailPromises);
 
-    // 3. Fetch product details (selling price) and stock for found products
+    // 3. Enrich with product details and stock (batched to avoid rate limits)
     const productIds = Object.keys(productMap);
-    const enrichPromises = productIds.slice(0, 50).map(async (pid) => {
-      try {
-        // Get product details (selling price)
-        const { data: prodDetail } = await blingFetch(
-          `/produtos/${pid}`, latestTokens || tokens
-        );
-        const prodData = prodDetail?.data || prodDetail || {};
-        productMap[pid].precoVenda = prodData.preco || 0;
-        productMap[pid].nome = prodData.nome || productMap[pid].nome;
-        productMap[pid].codigo = prodData.codigo || productMap[pid].codigo;
-        productMap[pid].categoria = prodData.categoria?.descricao || '—';
-      } catch (e) {
-        productMap[pid].precoVenda = 0;
-      }
+    const batchSize = 10;
 
-      try {
+    for (let i = 0; i < productIds.length && i < 50; i += batchSize) {
+      const batch = productIds.slice(i, i + batchSize);
+      const enrichPromises = batch.map(async (pid) => {
+        // Get product details
+        try {
+          const { data: prodDetail, newTokens: t3 } = await blingFetch(
+            `/produtos/${pid}`, currentTokens()
+          );
+          if (t3) latestTokens = t3;
+          const prodData = prodDetail?.data || prodDetail || {};
+
+          // Try multiple possible price fields
+          productMap[pid].precoVenda =
+            prodData.preco ||
+            prodData.precoVenda ||
+            prodData.valorVenda ||
+            0;
+
+          // Also get precoCusto from product if we don't have it from purchase
+          if (!productMap[pid].precoCusto && prodData.precoCusto) {
+            productMap[pid].precoCusto = prodData.precoCusto;
+          }
+
+          productMap[pid].nome = prodData.nome || productMap[pid].nome;
+          productMap[pid].codigo = prodData.codigo || productMap[pid].codigo;
+
+          // Category - try multiple paths
+          productMap[pid].categoria =
+            prodData.categoria?.descricao ||
+            prodData.categoriaProduto?.descricao ||
+            prodData.grupo?.nome ||
+            prodData.grupoProduto ||
+            '';
+
+          // Extra useful fields
+          productMap[pid].situacao = prodData.situacao || '';
+          productMap[pid].estoqueMinimo = prodData.estoqueMinimo || 0;
+          productMap[pid].estoqueMaximo = prodData.estoqueMaximo || 0;
+        } catch (e) {
+          productMap[pid].precoVenda = 0;
+          productMap[pid].categoria = '';
+        }
+
         // Get stock
-        const { data: stockDetail } = await blingFetch(
-          `/estoques/saldos?idsProdutos[]=${pid}`, latestTokens || tokens
-        );
-        const stockData = stockDetail?.data || stockDetail || [];
-        const totalStock = stockData.reduce((sum, s) => {
-          return sum + (s.saldoFisicoTotal || s.saldoFisico || 0);
-        }, 0);
-        productMap[pid].estoque = totalStock;
-      } catch (e) {
-        productMap[pid].estoque = 0;
-      }
-    });
+        try {
+          const { data: stockDetail, newTokens: t4 } = await blingFetch(
+            `/estoques/saldos?idsProdutos[]=${pid}`, currentTokens()
+          );
+          if (t4) latestTokens = t4;
+          const stockData = stockDetail?.data || stockDetail || [];
+          const totalStock = stockData.reduce((sum, s) => {
+            return sum + (s.saldoFisicoTotal || s.saldoFisico || 0);
+          }, 0);
+          productMap[pid].estoque = totalStock;
+        } catch (e) {
+          productMap[pid].estoque = 0;
+        }
+      });
 
-    await Promise.all(enrichPromises);
+      await Promise.all(enrichPromises);
+    }
 
     // 4. Calculate margin and return
     const products = Object.values(productMap).map(p => ({
       ...p,
-      margem: p.precoVenda && p.precoCusto
+      margem: p.precoVenda && p.precoCusto && p.precoVenda > 0
         ? (((p.precoVenda - p.precoCusto) / p.precoVenda) * 100).toFixed(1)
         : null,
     }));
