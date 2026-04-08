@@ -137,7 +137,7 @@ export default function Dashboard() {
       ? (supplierProducts.reduce((s, p) => s + (parseFloat(p.margem) || 0), 0) /
          supplierProducts.filter(p => p.margem).length).toFixed(1)
       : null,
-    zeroPrice: supplierProducts.filter(p => !p.precoVenda || p.precoVenda === 0).length,
+    zeroPrice: supplierProducts.filter(p => !p.preco || p.preco === 0).length,
   };
 
   // Sort indicator
@@ -327,8 +327,8 @@ export default function Dashboard() {
                       <th className="text-right cursor-pointer select-none" onClick={() => handleSort('precoCusto')}>
                         Custo <SortIcon field="precoCusto" />
                       </th>
-                      <th className="text-right cursor-pointer select-none" onClick={() => handleSort('precoVenda')}>
-                        Venda <SortIcon field="precoVenda" />
+                      <th className="text-right cursor-pointer select-none" onClick={() => handleSort('preco')}>
+                        Venda <SortIcon field="preco" />
                       </th>
                       <th className="text-right cursor-pointer select-none" onClick={() => handleSort('margem')}>
                         Margem <SortIcon field="margem" />
@@ -336,8 +336,8 @@ export default function Dashboard() {
                       <th className="text-right cursor-pointer select-none" onClick={() => handleSort('estoque')}>
                         Estoque <SortIcon field="estoque" />
                       </th>
-                      <th className="text-right pr-6 cursor-pointer select-none" onClick={() => handleSort('ultimaCompraData')}>
-                        Última Compra <SortIcon field="ultimaCompraData" />
+                      <th className="text-right pr-6 cursor-pointer select-none" onClick={() => handleSort('marca')}>
+                        Marca <SortIcon field="marca" />
                       </th>
                     </tr>
                   </thead>
@@ -347,7 +347,7 @@ export default function Dashboard() {
                       const isLowMargin = !isNaN(margin) && margin < 20;
                       const isHighMargin = !isNaN(margin) && margin >= 40;
                       const isLowStock = p.estoque <= 5;
-                      const noPrice = !p.precoVenda || p.precoVenda === 0;
+                      const noPrice = !p.preco || p.preco === 0;
                       return (
                         <tr key={p.id || i}>
                           <td className="pl-6 font-mono text-xs text-accent-blue">{p.codigo}</td>
@@ -361,7 +361,7 @@ export default function Dashboard() {
                           <td className={`text-right font-mono text-sm ${noPrice ? 'text-gray-600' : ''}`}>
                             {noPrice ? (
                               <span className="text-[10px] text-amber-500/70 font-mono">SEM PREÇO</span>
-                            ) : formatCurrency(p.precoVenda)}
+                            ) : formatCurrency(p.preco)}
                           </td>
                           <td className="text-right">
                             {p.margem ? (
@@ -378,9 +378,8 @@ export default function Dashboard() {
                             {p.estoque}
                             {isLowStock && <AlertTriangle size={11} className="inline ml-1 text-rose-400" />}
                           </td>
-                          <td className="text-right pr-6">
-                            <p className="text-xs text-gray-400 font-mono">{formatDate(p.ultimaCompraData)}</p>
-                            <p className="text-[10px] text-gray-600">{p.ultimaCompraQtd} {p.unidade}</p>
+                          <td className="text-right pr-6 text-xs text-gray-400">
+                            {p.marca || '—'}
                           </td>
                         </tr>
                       );

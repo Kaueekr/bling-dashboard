@@ -11,143 +11,159 @@ export async function GET(request, { params }) {
 
   const supplierId = params.id;
   let latestTokens = null;
+  const currentTokens = () => latestTokens || tokens;
 
   try {
-    // 1. Fetch purchase orders for this supplier
-    const purchaseParams = new URLSearchParams({
-      pagina: 1,
-      limite: 100,
-      idContato: supplierId,
-    });
+    // ── Step 1: Get all product-supplier links (paginated) ──
+    let allLinks = [];
+    let page = 1;
+    let hasMore = true;
 
-    const { data: purchasesData, newTokens: t1 } = await blingFetch(
-      `/pedidos/compras?${purchaseParams}`, tokens
-    );
-    if (t1) latestTokens = t1;
-    const currentTokens = () => latestTokens || tokens;
+    while (hasMore) {
+      const linkParams = new URLSearchParams({
+        pagina: page,
+        limite: 100,
+        idContato: supplierId,
+      });
 
-    const purchases = purchasesData?.data || purchasesData || [];
-
-    // 2. Get details for each purchase to extract items
-    const productMap = {};
-    const detailPromises = purchases.slice(0, 30).map(async (purchase) => {
       try {
-        const { data: detail, newTokens: t2 } = await blingFetch(
-          `/pedidos/compras/${purchase.id}`, currentTokens()
+        const { data: linksData, newTokens: t } = await blingFetch(
+          `/produtos/fornecedores?${linkParams}`, currentTokens()
         );
-        if (t2) latestTokens = t2;
+        if (t) latestTokens = t;
 
-        const orderData = detail?.data || detail || {};
-        const items = orderData.itens || [];
-        const orderDate = orderData.data || purchase.data;
-
-        items.forEach(item => {
-          const productId = item.produto?.id;
-          if (!productId) return;
-
-          const existing = productMap[productId];
-          const itemDate = orderDate ? new Date(orderDate) : new Date(0);
-
-          if (!existing || itemDate > new Date(existing.ultimaCompraData)) {
-            productMap[productId] = {
-              id: productId,
-              codigo: item.produto?.codigo || item.codigo || '—',
-              nome: item.descricao || item.produto?.nome || 'Sem nome',
-              precoCusto: item.valor || item.preco || 0,
-              quantidade: item.quantidade || 0,
-              ultimaCompraData: orderDate || null,
-              ultimaCompraQtd: item.quantidade || 0,
-              unidade: item.unidade || 'UN',
-            };
-          }
-        });
+        const links = linksData?.data || linksData || [];
+        if (links.length > 0) {
+          allLinks = [...allLinks, ...links];
+          page++;
+          if (links.length < 100) hasMore = false;
+        } else {
+          hasMore = false;
+        }
       } catch (e) {
-        // Skip failed order details
+        // If /produtos/fornecedores doesn't work, try alternate approach
+        hasMore = false;
       }
-    });
+    }
 
-    await Promise.all(detailPromises);
+    // ── Step 2: If the supplier-products endpoint didn't work, ──
+    //    try getting ALL products and filter by checking each one
+    if (allLinks.length === 0) {
+      // Fallback: get products from purchase orders
+      const purchaseParams = new URLSearchParams({
+        pagina: 1, limite: 100, idContato: supplierId,
+      });
+      const { data: purchData, newTokens: tp } = await blingFetch(
+        `/pedidos/compras?${purchaseParams}`, currentTokens()
+      );
+      if (tp) latestTokens = tp;
+      const purchases = purchData?.data || purchData || [];
 
-    // 3. Enrich with product details and stock (batched to avoid rate limits)
-    const productIds = Object.keys(productMap);
+      // Get product IDs from purchase order details
+      const productIds = new Set();
+      const detailPromises = purchases.slice(0, 50).map(async (p) => {
+        try {
+          const { data: detail } = await blingFetch(
+            `/pedidos/compras/${p.id}`, currentTokens()
+          );
+          const items = detail?.data?.itens || detail?.itens || [];
+          items.forEach(item => {
+            if (item.produto?.id) productIds.add(item.produto.id);
+          });
+        } catch (e) {}
+      });
+      await Promise.all(detailPromises);
+
+      // Create fake links for these products
+      productIds.forEach(id => {
+        allLinks.push({ produto: { id } });
+      });
+    }
+
+    // ── Step 3: Fetch full product details + stock for each product ──
+    const products = [];
     const batchSize = 10;
+    const productIds = allLinks.map(l =>
+      l.produto?.id || l.idProduto || l.id
+    ).filter(Boolean);
 
-    for (let i = 0; i < productIds.length && i < 50; i += batchSize) {
-      const batch = productIds.slice(i, i + batchSize);
-      const enrichPromises = batch.map(async (pid) => {
-        // Get product details
+    // Deduplicate
+    const uniqueIds = [...new Set(productIds)];
+
+    for (let i = 0; i < uniqueIds.length; i += batchSize) {
+      const batch = uniqueIds.slice(i, i + batchSize);
+      const batchPromises = batch.map(async (pid) => {
+        const product = { id: pid };
+
+        // Fetch product details
         try {
           const { data: prodDetail, newTokens: t3 } = await blingFetch(
             `/produtos/${pid}`, currentTokens()
           );
           if (t3) latestTokens = t3;
-          const prodData = prodDetail?.data || prodDetail || {};
+          const p = prodDetail?.data || prodDetail || {};
 
-          // Try multiple possible price fields
-          productMap[pid].precoVenda =
-            prodData.preco ||
-            prodData.precoVenda ||
-            prodData.valorVenda ||
-            0;
-
-          // Also get precoCusto from product if we don't have it from purchase
-          if (!productMap[pid].precoCusto && prodData.precoCusto) {
-            productMap[pid].precoCusto = prodData.precoCusto;
-          }
-
-          productMap[pid].nome = prodData.nome || productMap[pid].nome;
-          productMap[pid].codigo = prodData.codigo || productMap[pid].codigo;
-
-          // Category - try multiple paths
-          productMap[pid].categoria =
-            prodData.categoria?.descricao ||
-            prodData.categoriaProduto?.descricao ||
-            prodData.grupo?.nome ||
-            prodData.grupoProduto ||
-            '';
-
-          // Extra useful fields
-          productMap[pid].situacao = prodData.situacao || '';
-          productMap[pid].estoqueMinimo = prodData.estoqueMinimo || 0;
-          productMap[pid].estoqueMaximo = prodData.estoqueMaximo || 0;
+          product.codigo = p.codigo || '—';
+          product.nome = p.nome || 'Sem nome';
+          product.preco = p.preco || 0;           // Selling price
+          product.precoCusto = p.precoCusto || 0;  // Cost price
+          product.marca = p.marca || '';
+          product.unidade = p.unidade || 'UN';
+          product.situacao = p.situacao || '';
+          product.categoria = p.categoria?.descricao || '';
+          product.gtin = p.gtin || '';
+          product.estoqueMinimo = p.estoqueMinimo || 0;
+          product.estoqueMaximo = p.estoqueMaximo || 0;
         } catch (e) {
-          productMap[pid].precoVenda = 0;
-          productMap[pid].categoria = '';
+          product.nome = 'Erro ao carregar';
+          product.codigo = '—';
+          product.preco = 0;
+          product.precoCusto = 0;
         }
 
-        // Get stock
+        // Fetch stock
         try {
           const { data: stockDetail, newTokens: t4 } = await blingFetch(
             `/estoques/saldos?idsProdutos[]=${pid}`, currentTokens()
           );
           if (t4) latestTokens = t4;
           const stockData = stockDetail?.data || stockDetail || [];
-          const totalStock = stockData.reduce((sum, s) => {
-            return sum + (s.saldoFisicoTotal || s.saldoFisico || 0);
-          }, 0);
-          productMap[pid].estoque = totalStock;
+          product.estoque = stockData.reduce((sum, s) =>
+            sum + (s.saldoFisicoTotal || s.saldoFisico || 0), 0
+          );
         } catch (e) {
-          productMap[pid].estoque = 0;
+          product.estoque = 0;
         }
+
+        // Get supplier-specific data from the link (if available)
+        const link = allLinks.find(l =>
+          (l.produto?.id || l.idProduto) === pid
+        );
+        if (link) {
+          product.codigoFornecedor = link.codigo || link.produtoCodigo || '';
+          product.precoCompra = link.precoCompra || link.precoCusto || 0;
+        }
+
+        // Calculate margin
+        if (product.preco && product.precoCusto && product.preco > 0) {
+          product.margem = (((product.preco - product.precoCusto) / product.preco) * 100).toFixed(1);
+        } else {
+          product.margem = null;
+        }
+
+        return product;
       });
 
-      await Promise.all(enrichPromises);
+      const batchResults = await Promise.all(batchPromises);
+      products.push(...batchResults);
     }
 
-    // 4. Calculate margin and return
-    const products = Object.values(productMap).map(p => ({
-      ...p,
-      margem: p.precoVenda && p.precoCusto && p.precoVenda > 0
-        ? (((p.precoVenda - p.precoCusto) / p.precoVenda) * 100).toFixed(1)
-        : null,
-    }));
-
+    // Sort by name
     products.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
 
     const response = NextResponse.json({
       data: products,
       total: products.length,
-      pedidos: purchases.length,
     });
 
     if (latestTokens) response.headers.set('Set-Cookie', createTokenCookie(latestTokens));
