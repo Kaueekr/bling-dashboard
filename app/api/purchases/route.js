@@ -1,22 +1,29 @@
 import { NextResponse } from 'next/server';
-import { blingFetch } from '@/lib/bling';
+import { blingFetch, getTokensFromCookies, createTokenCookie } from '@/lib/bling';
 
 export async function GET(request) {
+  const cookies = request.headers.get('cookie');
+  const tokens = getTokensFromCookies(cookies);
+
+  if (!tokens) {
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const page = searchParams.get('pagina') || 1;
   const limit = searchParams.get('limite') || 100;
   const startDate = searchParams.get('dataInicial') || '';
   const endDate = searchParams.get('dataFinal') || '';
-  const situationId = searchParams.get('idSituacao') || '';
 
   try {
     const params = new URLSearchParams({ pagina: page, limite: limit });
     if (startDate) params.set('dataInicial', startDate);
     if (endDate) params.set('dataFinal', endDate);
-    if (situationId) params.set('idSituacao', situationId);
 
-    const data = await blingFetch(`/pedidos/compras?${params}`);
-    return NextResponse.json(data);
+    const { data, newTokens } = await blingFetch(`/pedidos/compras?${params}`, tokens);
+    const response = NextResponse.json(data);
+    if (newTokens) response.headers.set('Set-Cookie', createTokenCookie(newTokens));
+    return response;
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

@@ -1,20 +1,24 @@
 import { NextResponse } from 'next/server';
-import { blingFetch } from '@/lib/bling';
+import { blingFetch, getTokensFromCookies, createTokenCookie } from '@/lib/bling';
 
 export async function GET(request) {
+  const cookies = request.headers.get('cookie');
+  const tokens = getTokensFromCookies(cookies);
+
+  if (!tokens) {
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const page = searchParams.get('pagina') || 1;
   const limit = searchParams.get('limite') || 100;
-  const name = searchParams.get('nome') || '';
-  const type = searchParams.get('tipo') || '';
 
   try {
     const params = new URLSearchParams({ pagina: page, limite: limit });
-    if (name) params.set('nome', name);
-    if (type) params.set('tipo', type);
-
-    const data = await blingFetch(`/produtos?${params}`);
-    return NextResponse.json(data);
+    const { data, newTokens } = await blingFetch(`/produtos?${params}`, tokens);
+    const response = NextResponse.json(data);
+    if (newTokens) response.headers.set('Set-Cookie', createTokenCookie(newTokens));
+    return response;
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
