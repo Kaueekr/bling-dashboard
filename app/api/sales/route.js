@@ -24,28 +24,17 @@ export async function GET(request) {
     const fmt = (d) => d.toISOString().split('T')[0];
 
     // ── Get one page of sales orders (ALL channels) ──
-    const qp = new URLSearchParams({
+   const qp = new URLSearchParams({
       pagina: page,
       limite: 100,
       dataInicial: fmt(startDate),
       dataFinal: fmt(endDate),
-      idsSituacoes: '9',
     });
 
-    // Try with situacao filter first, fallback without
     let orders = [];
-    try {
-      const { data: d, newTokens: t } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
-      if (t) latestTokens = t;
-      orders = d?.data || d || [];
-    } catch (e) {
-      // Retry without situacao filter
-      qp.delete('idsSituacoes');
-      const { data: d2, newTokens: t2 } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
-      if (t2) latestTokens = t2;
-      orders = d2?.data || d2 || [];
-    }
-
+    const { data: d, newTokens: t } = await blingFetch(`/pedidos/vendas?${qp}`, ct());
+    if (t) latestTokens = t;
+    orders = d?.data || d || [];
     // ── Get items from each order ──
     const productSales = {};
     const batchSize = 3;
